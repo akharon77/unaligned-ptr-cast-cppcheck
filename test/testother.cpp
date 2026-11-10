@@ -128,6 +128,7 @@ private:
         TEST_CASE(oldStylePointerCast);
         TEST_CASE(intToPointerCast);
         TEST_CASE(invalidPointerCast);
+        TEST_CASE(pointerCastAlignment);
 
         TEST_CASE(passedByValue);
         TEST_CASE(passedByValue_nonConst);
@@ -2460,6 +2461,105 @@ private:
         checkInvalidPointerCast("Q_DECLARE_METATYPE(int*)\n"); // #4135 - don't crash
     }
 
+#define checkPointerCastAlignment(...) checkPointerCastAlignment_(__FILE__, __LINE__, __VA_ARGS__)
+    template<size_t size>
+    void checkPointerCastAlignment_(const char* file, int line, const char (&code)[size]) {
+        /*const*/ Settings settings = settingsBuilder().severity(Severity::warning).build();
+        settings.platform.set(Platform::Unix64);
+
+        SimpleTokenizer tokenizer(settings, *this);
+        ASSERT_LOC(tokenizer.tokenize(code), file, line);
+
+        CheckOtherImpl checkOtherCpp(&tokenizer, settings, *this);
+        checkOtherCpp.pointerCastAlignment();
+    }
+
+    void pointerCastAlignment() {
+        checkPointerCastAlignment("struct Header { int value; };\n"
+                                  "void f(char* buffer) {\n"
+                                  "    Header* header = reinterpret_cast<Header*>(buffer);\n"
+                                  "}\n");
+        ASSERT_EQUALS("[test.cpp:3:22]: (warning) Casting from char * (alignment 1) to Header * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+
+        checkPointerCastAlignment("void f(int* value) {\n"
+                                  "    char* p = reinterpret_cast<char*>(value);\n"
+                                  "    int* q = reinterpret_cast<int*>(value);\n"
+                                  "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        checkPointerCastAlignment("struct Header { int value; };\n"
+                                  "char* buffer;\n"
+                                  "Header* header = reinterpret_cast<Header*>(buffer);\n");
+        ASSERT_EQUALS("[test.cpp:3:18]: (warning) Casting from char * (alignment 1) to Header * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+
+        checkPointerCastAlignment("void f(char** c, int** i) {\n"
+                                  "    int** p1 = reinterpret_cast<int**>(c);\n"
+                                  "    char* p2 = reinterpret_cast<char*>(i);\n"
+                                  "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        checkPointerCastAlignment("struct Unknown;\n"
+                                  "void f(Unknown* u, char* c) {\n"
+                                  "    Unknown* p1 = reinterpret_cast<Unknown*>(c);\n"
+                                  "    char* p2 = reinterpret_cast<char*>(u);\n"
+                                  "    void* p3 = reinterpret_cast<void*>(c);\n"
+                                  "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        checkPointerCastAlignment("using Function = void (*)();\n"
+                                  "struct S { char c; int i; };\n"
+                                  "void f(char* buffer, void* data, Function function, char S::* member, long integer) {\n"
+                                  "    Function p1 = reinterpret_cast<Function>(data);\n"
+                                  "    void* p2 = reinterpret_cast<void*>(function);\n"
+                                  "    int* p3 = reinterpret_cast<int*>(integer);\n"
+                                  "    long p4 = reinterpret_cast<long>(buffer);\n"
+                                  "    int S::* p5 = reinterpret_cast<int S::*>(member);\n"
+                                  "    Function p6 = (Function)data;\n"
+                                  "    void* p7 = (void*)function;\n"
+                                  "    int S::* p8 = (int S::*)member;\n"
+                                  "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        checkPointerCastAlignment("struct Header { int value; };\n"
+                                  "void f(char* buffer) {\n"
+                                  "    Header* header = static_cast<Header*>(static_cast<void*>(buffer));\n"
+                                  "}\n");
+        ASSERT_EQUALS("[test.cpp:3:22]: (warning) Casting from char * (alignment 1) to Header * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+
+        checkPointerCastAlignment("void f(int* value) {\n"
+                                  "    char* p = static_cast<char*>(static_cast<void*>(value));\n"
+                                  "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        checkPointerCastAlignment("struct Header { int value; };\n"
+                                  "void f(char* buffer) {\n"
+                                  "    void* data = static_cast<void*>(buffer);\n"
+                                  "    Header* header = static_cast<Header*>(data);\n"
+                                  "}\n");
+        ASSERT_EQUALS("[test.cpp:4:22]: (warning) Casting from char * (alignment 1) to Header * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+
+        checkPointerCastAlignment("struct Header { int value; };\n"
+                                  "void f(char* buffer, void* data) {\n"
+                                  "    Header* p1 = static_cast<Header*>(data);\n"
+                                  "    void* local = static_cast<void*>(buffer);\n"
+                                  "    Header* p2 = static_cast<Header*>(local);\n"
+                                  "    int value;\n"
+                                  "    local = &value;\n"
+                                  "    Header* p3 = static_cast<Header*>(local);\n"
+                                  "}\n");
+        ASSERT_EQUALS("[test.cpp:5:18]: (warning) Casting from char * (alignment 1) to Header * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+
+        checkPointerCastAlignment("struct Header { int value; };\n"
+                                  "void f(char* buffer, int* value) {\n"
+                                  "    Header* p1 = (Header*)buffer;\n"
+                                  "    int* p2 = (int*)value;\n"
+                                  "    char* p3 = (char*)value;\n"
+                                  "    int* p4 = (int*)0;\n"
+                                  "    long p5 = (long)buffer;\n"
+                                  "}\n");
+        ASSERT_EQUALS("[test.cpp:3:18]: (warning) Casting from char * (alignment 1) to Header * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+    }
+
 
     void passedByValue() {
         check("void f(const std::string str) {}\n");
@@ -3897,7 +3997,7 @@ private:
               "void f(S& s) {\n"
               "    const int* p = s.g<int>();\n"
               "}\n");
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:4:16]: (warning) Casting from char * (alignment 1) to signed int * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
 
         check("struct S { int x; };\n" // #11818
               "std::istream& f(std::istream& is, S& s) {\n"
@@ -4085,7 +4185,7 @@ private:
         ASSERT_EQUALS("", errout_str());
 
         check("size_t* f(std::array<uint8_t, 128>& a) { return reinterpret_cast<size_t*>(a.data()); }\n"); // #14074
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:49]: (warning) Casting from unsigned char * (alignment 1) to unsigned long * (alignment 8) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
 
         check("struct S { int i; };\n" // #14231
               "void* f(S& s, int& v) {\n"

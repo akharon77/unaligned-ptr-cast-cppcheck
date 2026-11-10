@@ -1333,6 +1333,7 @@ public:
         Pointee,
     };
     size_t getSizeOf(const Settings& settings, Accuracy accuracy, SizeOf sizeOf, int maxRecursion = 0) const;
+    size_t getAlignOf(const Settings& settings, Accuracy accuracy, SizeOf sizeOf, int maxRecursion = 0) const;
 
     /// Check if type is the same ignoring const and references
     bool isTypeEqual(const ValueType* that) const;

@@ -77,6 +77,7 @@ private:
                // warning
                "- either division by zero or useless condition\n"
                "- access of moved or forwarded variable.\n"
+               "- pointer casts to a type with stricter alignment\n"
 
                // performance
                "- redundant data copying for const variable\n"
@@ -151,6 +152,9 @@ public:
 
     /** @brief Check for pointer casts to a type with an incompatible binary data representation */
     void invalidPointerCast();
+
+    /** @brief Check for pointer casts to a type with stricter alignment */
+    void pointerCastAlignment();
 
     /** @brief %Check scope of variables */
     void checkVariableScope();
@@ -277,6 +281,7 @@ public:
     void intToPointerCastError(const Token *tok, const std::string& format);
     void suspiciousFloatingPointCastError(const Token *tok);
     void invalidPointerCastError(const Token* tok, const std::string& from, const std::string& to, bool inconclusive, bool toIsInt);
+    void pointerCastAlignmentError(const Token* tok, const std::string& from, const std::string& to, std::size_t fromAlignment, std::size_t toAlignment);
     void passedByValueError(const Variable* var, bool inconclusive, bool isRangeBasedFor = false);
     void constVariableError(const Variable *var, const Function *function, bool foundAllBaseClasses = true);
     void constStatementError(const Token *tok, const std::string &type, bool inconclusive);

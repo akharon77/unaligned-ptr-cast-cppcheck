@@ -571,8 +571,10 @@ void CheckOtherImpl::invalidPointerCast()
                 continue;
 
             if (fromType->type != toType->type && fromType->type >= ValueType::Type::BOOL && toType->type >= ValueType::Type::BOOL && (toType->type != ValueType::Type::CHAR || printInconclusive)) {
-                if (toType->isIntegral() && fromType->isIntegral())
+                if (toType->isIntegral() && fromType->isIntegral()) {
+                    logChecker("CheckOther::invalidPointerCast"); // portability
                     continue;
+                }
 
                 invalidPointerCastError(tok, fromType->str(), toType->str(), toType->type == ValueType::Type::CHAR, toType->isIntegral());
             }
@@ -587,6 +589,104 @@ void CheckOtherImpl::invalidPointerCastError(const Token* tok, const std::string
         reportError(tok, Severity::portability, "invalidPointerCast", "Casting from " + from + " to " + to + " is not portable due to different binary data representations on different platforms.", CWE704, inconclusive ? Certainty::inconclusive : Certainty::normal);
     } else
         reportError(tok, Severity::portability, "invalidPointerCast", "Casting between " + from + " and " + to + " which have an incompatible binary data representation.", CWE704, Certainty::normal);
+}
+
+static bool isMemberPointerType(const Token* start, const Token* end)
+{
+    for (const Token* tok = start; tok && tok != end; tok = tok->next()) {
+        if (Token::simpleMatch(tok, ":: *"))
+            return true;
+    }
+    return false;
+}
+
+static bool isVoidPointer(const ValueType* vt)
+{
+    return vt && vt->type == ValueType::Type::VOID && vt->pointer == 1;
+}
+
+static const Token* getStaticVoidCastSource(const Token* tok)
+{
+    if (!isCPPCast(tok) || !Token::simpleMatch(tok->astOperand1(), "static_cast") || !isVoidPointer(tok->valueType()))
+        return nullptr;
+    return tok->astOperand2();
+}
+
+static const Token* getStaticVoidCastSource(const Token* expr, const Settings& settings)
+{
+    if (const Token* source = getStaticVoidCastSource(expr))
+        return source;
+
+    const Variable* variable = expr->variable();
+    if (!variable || !variable->isLocal())
+        return nullptr;
+    const Token* init = variable->nameToken()->next();
+    if (init->isSplittedVarDeclEq() && Token::Match(init, "; %varid% =", variable->declarationId()))
+        init = init->tokAt(2);
+    if (!Token::simpleMatch(init, "="))
+        return nullptr;
+    const Token* changeStart = nextAfterAstRightmostLeaf(init);
+    if (changeStart && isVariableChanged(changeStart, previousBeforeAstLeftmostLeaf(expr), variable->declarationId(), false, settings))
+        return nullptr;
+    return getStaticVoidCastSource(init->astOperand2());
+}
+
+void CheckOtherImpl::pointerCastAlignment()
+{
+    if (!mSettings.severity.isEnabled(Severity::warning))
+        return;
+
+    logChecker("CheckOther::pointerCastAlignment"); // warning
+
+    for (const Token* tok = mTokenizer->tokens(); tok; tok = tok->next()) {
+        const Token* typeStart = nullptr;
+        const Token* typeEnd = nullptr;
+        const Token* toTok = nullptr;
+        const Token* fromTok = nullptr;
+        bool isStaticCast = false;
+        if (Token::Match(tok, "reinterpret_cast|static_cast <") && tok->linkAt(1)) {
+            isStaticCast = tok->str() == "static_cast";
+            typeStart = tok->next();
+            typeEnd = tok->linkAt(1);
+            toTok = typeEnd->next();
+            fromTok = toTok ? toTok->astOperand2() : nullptr;
+        } else if (tok->str() == "(" && tok->isCast() && !isCPPCast(tok)) {
+            typeStart = tok->next();
+            typeEnd = tok->link();
+            toTok = tok;
+            fromTok = tok->astOperand1();
+        }
+        if (!fromTok || isMemberPointerType(typeStart, typeEnd))
+            continue;
+
+        const ValueType* fromType = fromTok->valueType();
+        const ValueType* toType = toTok->valueType();
+        if (isStaticCast) {
+            if (!isVoidPointer(fromType))
+                continue;
+            fromTok = getStaticVoidCastSource(fromTok, mSettings);
+            fromType = fromTok ? fromTok->valueType() : nullptr;
+        }
+        if (!fromType || !toType || !fromType->pointer || !toType->pointer)
+            continue;
+        if (fromTok->variable() && isMemberPointerType(fromTok->variable()->typeStartToken(), fromTok->variable()->nameToken()))
+            continue;
+
+        const std::size_t fromAlignment = fromType->getAlignOf(mSettings, ValueType::Accuracy::ExactOrZero, ValueType::SizeOf::Pointee);
+        const std::size_t toAlignment = toType->getAlignOf(mSettings, ValueType::Accuracy::ExactOrZero, ValueType::SizeOf::Pointee);
+        if (!fromAlignment || toAlignment <= fromAlignment)
+            continue;
+
+        pointerCastAlignmentError(tok, fromType->str(), toType->str(), fromAlignment, toAlignment);
+    }
+}
+
+void CheckOtherImpl::pointerCastAlignmentError(const Token* tok, const std::string& from, const std::string& to, std::size_t fromAlignment, std::size_t toAlignment)
+{
+    std::ostringstream errmsg;
+    errmsg << "Casting from " << from << " (alignment " << fromAlignment << ") to " << to << " (alignment " << toAlignment
+           << ") can result in a misaligned pointer; dereferencing it is undefined behavior.";
+    reportError(tok, Severity::warning, "pointerCastAlignment", errmsg.str(), CWE704, Certainty::normal);
 }
 
 
@@ -4877,6 +4977,7 @@ void CheckOther::runChecks(const Tokenizer &tokenizer, ErrorLogger& errorLogger)
     checkOther.warningIntToPointerCast();
     checkOther.suspiciousFloatingPointCast();
     checkOther.invalidPointerCast();
+    checkOther.pointerCastAlignment();
     checkOther.checkCharVariable();
     checkOther.redundantBitwiseOperationInSwitchError();
     checkOther.checkSuspiciousCaseInSwitch();
@@ -4946,6 +5047,7 @@ void CheckOther::getErrorMessages(ErrorLogger& errorLogger, const Settings &sett
     c.dangerousTypeCastError(nullptr, true);
     c.intToPointerCastError(nullptr, "decimal");
     c.suspiciousFloatingPointCastError(nullptr);
+    c.pointerCastAlignmentError(nullptr, "char *", "int *", 1, 4);
     c.passedByValueError(nullptr, false);
     // TODO: iterateByValue
     // TODO: passedByValueCallback

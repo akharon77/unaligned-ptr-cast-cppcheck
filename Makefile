@@ -132,10 +132,8 @@ ifeq (clang++, $(findstring clang++,$(CXX)))
     CPPCHK_GLIBCXX_DEBUG=
 endif
 ifndef CXXFLAGS
-    CXXFLAGS=-O2 -Wall -Wno-sign-compare -Wno-multichar
+    CXXFLAGS=-pedantic -Wall -Wextra -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wmissing-format-attribute -Wno-long-long -Wpacked -Wredundant-decls -Wundef -Wno-sign-compare -Wno-multichar -Woverloaded-virtual -g
 endif
-
-override CPPFLAGS += -DNDEBUG
 
 ifeq (g++, $(findstring g++,$(CXX)))
     override CXXFLAGS += -pipe
@@ -398,7 +396,7 @@ dmake:	tools/dmake/dmake.o cli/filelister.o $(libcppdir)/pathmatch.o $(libcppdir
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 run-dmake: dmake
-	./dmake --release
+	./dmake
 
 clean:
 	rm -f build/*.cpp build/*.o lib/*.o cli/*.o frontend/*.o test/*.o tools/dmake/*.o externals/*/*.o testrunner dmake cppcheck cppcheck.exe cppcheck.1
