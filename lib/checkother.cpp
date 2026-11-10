@@ -631,6 +631,82 @@ static const Token* getStaticVoidCastSource(const Token* expr, const Settings& s
     return getStaticVoidCastSource(init->astOperand2());
 }
 
+static bool isAlignedVariable(const Variable* variable, std::size_t alignment, const Settings& settings)
+{
+    for (const std::string& expression : variable->nameToken()->getAttributeAlignas()) {
+        if (MathLib::isInt(expression)) {
+            const MathLib::bigint value = MathLib::toBigNumber(expression);
+            if (value >= static_cast<MathLib::bigint>(alignment) && value % static_cast<MathLib::bigint>(alignment) == 0)
+                return true;
+            continue;
+        }
+
+        std::string type = expression;
+        const std::string prefix = "alignof ( ";
+        const std::string suffix = " )";
+        if (type.size() > prefix.size() && type.compare(0, prefix.size(), prefix) == 0) {
+            type = type.substr(prefix.size());
+            if (type.size() > suffix.size() && type.compare(type.size() - suffix.size(), suffix.size(), suffix) == 0)
+                type.erase(type.size() - suffix.size());
+        }
+
+        TokenList typeTokens(settings, variable->nameToken()->isCpp() ? Standards::Language::CPP : Standards::Language::C);
+        if (!typeTokens.createTokensFromBuffer(type.c_str(), type.size()))
+            continue;
+        ValueType valueType = ValueType::parseDecl(typeTokens.front(), settings);
+        if (valueType.type == ValueType::Type::UNKNOWN_TYPE && !valueType.fromLibraryType(type, settings))
+            continue;
+        const std::size_t typeAlignment = valueType.getAlignOf(settings, ValueType::Accuracy::ExactOrZero, ValueType::SizeOf::Pointer);
+        if (typeAlignment >= alignment && typeAlignment % alignment == 0)
+            return true;
+    }
+    return false;
+}
+
+static bool isAlignedPointer(const Token* expr, std::size_t alignment, const Settings& settings)
+{
+    if (!expr)
+        return false;
+
+    if (Token::Match(expr, "+|-") && expr->isBinaryOp()) {
+        const bool pointer1 = expr->astOperand1()->valueType() && expr->astOperand1()->valueType()->pointer > 0;
+        const bool pointer2 = expr->astOperand2()->valueType() && expr->astOperand2()->valueType()->pointer > 0;
+        const Token* pointer = nullptr;
+        const Token* offset = nullptr;
+        if (pointer1 && !pointer2) {
+            pointer = expr->astOperand1();
+            offset = expr->astOperand2();
+        } else if (expr->str() == "+" && !pointer1 && pointer2) {
+            pointer = expr->astOperand2();
+            offset = expr->astOperand1();
+        } else {
+            return false;
+        }
+        if (!offset->hasKnownIntValue())
+            return false;
+        const std::size_t elementSize = pointer->valueType()->getSizeOf(settings, ValueType::Accuracy::ExactOrZero, ValueType::SizeOf::Pointee);
+        return elementSize > 0 &&
+               (offset->getKnownIntValue() * elementSize) % static_cast<MathLib::bigint>(alignment) == 0 &&
+               isAlignedPointer(pointer, alignment, settings);
+    }
+
+    const bool addressOf = expr->isUnaryOp("&");
+    const Token* object = addressOf ? expr->astOperand1() : expr;
+    if (addressOf && Token::simpleMatch(object, "[")) {
+        const Token* pointer = object->astOperand1();
+        const Token* offset = object->astOperand2();
+        if (!pointer || !offset || !offset->hasKnownIntValue() || !object->valueType())
+            return false;
+        const std::size_t elementSize = object->valueType()->getSizeOf(settings, ValueType::Accuracy::ExactOrZero, ValueType::SizeOf::Pointer);
+        return elementSize > 0 &&
+               (offset->getKnownIntValue() * elementSize) % static_cast<MathLib::bigint>(alignment) == 0 &&
+               isAlignedPointer(pointer, alignment, settings);
+    }
+
+    const Variable* variable = object ? object->variable() : nullptr;
+    return variable && (addressOf || variable->isArray()) && isAlignedVariable(variable, alignment, settings);
+}
+
 void CheckOtherImpl::pointerCastAlignment()
 {
     if (!mSettings.severity.isEnabled(Severity::warning))
@@ -675,6 +751,8 @@ void CheckOtherImpl::pointerCastAlignment()
         const std::size_t fromAlignment = fromType->getAlignOf(mSettings, ValueType::Accuracy::ExactOrZero, ValueType::SizeOf::Pointee);
         const std::size_t toAlignment = toType->getAlignOf(mSettings, ValueType::Accuracy::ExactOrZero, ValueType::SizeOf::Pointee);
         if (!fromAlignment || toAlignment <= fromAlignment)
+            continue;
+        if (isAlignedPointer(fromTok, toAlignment, mSettings))
             continue;
 
         pointerCastAlignmentError(tok, fromType->str(), toType->str(), fromAlignment, toAlignment);

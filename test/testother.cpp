@@ -2464,7 +2464,7 @@ private:
 #define checkPointerCastAlignment(...) checkPointerCastAlignment_(__FILE__, __LINE__, __VA_ARGS__)
     template<size_t size>
     void checkPointerCastAlignment_(const char* file, int line, const char (&code)[size]) {
-        /*const*/ Settings settings = settingsBuilder().severity(Severity::warning).build();
+        /*const*/ Settings settings = settingsBuilder().severity(Severity::warning).library("std.cfg").build();
         settings.platform.set(Platform::Unix64);
 
         SimpleTokenizer tokenizer(settings, *this);
@@ -2558,6 +2558,54 @@ private:
                                   "    long p5 = (long)buffer;\n"
                                   "}\n");
         ASSERT_EQUALS("[test.cpp:3:18]: (warning) Casting from char * (alignment 1) to Header * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+
+        checkPointerCastAlignment("void f() {\n"
+                                  "    alignas(uint32_t) char buf[16];\n"
+                                  "    uint32_t* p1 = reinterpret_cast<uint32_t*>(buf);\n"
+                                  "    uint32_t* p2 = static_cast<uint32_t*>(static_cast<void*>(buf));\n"
+                                  "    uint32_t* p3 = (uint32_t*)(buf + 4);\n"
+                                  "    uint32_t* p4 = reinterpret_cast<uint32_t*>(buf + 8);\n"
+                                  "    uint32_t* p5 = reinterpret_cast<uint32_t*>(4 + buf);\n"
+                                  "    uint32_t* p6 = reinterpret_cast<uint32_t*>((buf + 4) + 4);\n"
+                                  "    uint32_t* p7 = reinterpret_cast<uint32_t*>(&buf[4]);\n"
+                                  "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        checkPointerCastAlignment("void f(int offset) {\n"
+                                  "    alignas(uint32_t) char buf[16];\n"
+                                  "    uint32_t* p1 = reinterpret_cast<uint32_t*>(buf + 1);\n"
+                                  "    uint32_t* p2 = reinterpret_cast<uint32_t*>(&buf[1]);\n"
+                                  "    uint32_t* p3 = reinterpret_cast<uint32_t*>(buf + offset);\n"
+                                  "    uint32_t* p4 = reinterpret_cast<uint32_t*>(buf - 3);\n"
+                                  "}\n");
+        ASSERT_EQUALS("[test.cpp:3:20]: (warning) Casting from char * (alignment 1) to unsigned int * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n"
+                      "[test.cpp:4:20]: (warning) Casting from char * (alignment 1) to unsigned int * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n"
+                      "[test.cpp:5:20]: (warning) Casting from char * (alignment 1) to unsigned int * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n"
+                      "[test.cpp:6:20]: (warning) Casting from char * (alignment 1) to unsigned int * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+
+        checkPointerCastAlignment("void f() {\n"
+                                  "    alignas(4) char a[8];\n"
+                                  "    alignas(unsigned int) char b[8];\n"
+                                  "    alignas(alignof(uint32_t)) char c[8];\n"
+                                  "    alignas(uint32_t) char d;\n"
+                                  "    uint32_t* p1 = reinterpret_cast<uint32_t*>(a);\n"
+                                  "    uint32_t* p2 = reinterpret_cast<uint32_t*>(b + 4);\n"
+                                  "    uint32_t* p3 = reinterpret_cast<uint32_t*>(c);\n"
+                                  "    uint32_t* p4 = reinterpret_cast<uint32_t*>(&d);\n"
+                                  "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        checkPointerCastAlignment("void f() {\n"
+                                  "    alignas(2) char buf[16];\n"
+                                  "    uint32_t* p = reinterpret_cast<uint32_t*>(buf);\n"
+                                  "}\n");
+        ASSERT_EQUALS("[test.cpp:3:19]: (warning) Casting from char * (alignment 1) to unsigned int * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+
+        checkPointerCastAlignment("void f() {\n"
+                                  "    alignas(uint32_t) char* buf;\n"
+                                  "    uint32_t* p = reinterpret_cast<uint32_t*>(buf);\n"
+                                  "}\n");
+        ASSERT_EQUALS("[test.cpp:3:19]: (warning) Casting from char * (alignment 1) to unsigned int * (alignment 4) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
     }
 
 
@@ -4184,8 +4232,12 @@ private:
         check("void push(V& v) { v.push_back({ .x = 1 }); }\n"); // #14010
         ASSERT_EQUALS("", errout_str());
 
-        check("size_t* f(std::array<uint8_t, 128>& a) { return reinterpret_cast<size_t*>(a.data()); }\n"); // #14074
-        ASSERT_EQUALS("[test.cpp:1:49]: (warning) Casting from unsigned char * (alignment 1) to unsigned long * (alignment 8) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+        {
+            /*const*/ Settings settingsUnix64 = settingsBuilder(settings1).platform(Platform::Unix64).build();
+            check("size_t* f(std::array<uint8_t, 128>& a) { return reinterpret_cast<size_t*>(a.data()); }\n", // #14074
+                  dinit(CheckOptions, $.settings = &settingsUnix64));
+            ASSERT_EQUALS("[test.cpp:1:49]: (warning) Casting from unsigned char * (alignment 1) to unsigned long * (alignment 8) can result in a misaligned pointer; dereferencing it is undefined behavior. [pointerCastAlignment]\n", errout_str());
+        }
 
         check("struct S { int i; };\n" // #14231
               "void* f(S& s, int& v) {\n"
