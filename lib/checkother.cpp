@@ -633,12 +633,11 @@ static const Token* getStaticVoidCastSource(const Token* expr, const Settings& s
 
 static bool isAlignedVariable(const Variable* variable, std::size_t alignment, const Settings& settings)
 {
-    for (const std::string& expression : variable->nameToken()->getAttributeAlignas()) {
+    const std::vector<std::string> alignasExpressions = variable->nameToken()->getAttributeAlignas();
+    return std::any_of(alignasExpressions.cbegin(), alignasExpressions.cend(), [&](const std::string& expression) {
         if (MathLib::isInt(expression)) {
             const MathLib::bigint value = MathLib::toBigNumber(expression);
-            if (value >= static_cast<MathLib::bigint>(alignment) && value % static_cast<MathLib::bigint>(alignment) == 0)
-                return true;
-            continue;
+            return value >= static_cast<MathLib::bigint>(alignment) && value % static_cast<MathLib::bigint>(alignment) == 0;
         }
 
         std::string type = expression;
@@ -652,15 +651,13 @@ static bool isAlignedVariable(const Variable* variable, std::size_t alignment, c
 
         TokenList typeTokens(settings, variable->nameToken()->isCpp() ? Standards::Language::CPP : Standards::Language::C);
         if (!typeTokens.createTokensFromBuffer(type.c_str(), type.size()))
-            continue;
+            return false;
         ValueType valueType = ValueType::parseDecl(typeTokens.front(), settings);
         if (valueType.type == ValueType::Type::UNKNOWN_TYPE && !valueType.fromLibraryType(type, settings))
-            continue;
+            return false;
         const std::size_t typeAlignment = valueType.getAlignOf(settings, ValueType::Accuracy::ExactOrZero, ValueType::SizeOf::Pointer);
-        if (typeAlignment >= alignment && typeAlignment % alignment == 0)
-            return true;
-    }
-    return false;
+        return typeAlignment >= alignment && typeAlignment % alignment == 0;
+    });
 }
 
 static bool isAlignedPointer(const Token* expr, std::size_t alignment, const Settings& settings)
